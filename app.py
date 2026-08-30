@@ -53,12 +53,11 @@ def map_columns(df):
 
 
 def label_cluster(row, profile_df):
-    """Generate a human-readable label for a cluster based on its
-    relative Recency / Frequency / Monetary standing vs other clusters."""
+    """Generate a human-readable label based on relative RFM standing."""
     n = profile_df.shape[0]
-    recency_rank = profile_df["Avg_Recency"].rank()[row.name]          # lower recency = better
-    monetary_rank = profile_df["Avg_Monetary"].rank(ascending=False)[row.name]  # higher spend = better
-    frequency_rank = profile_df["Avg_Frequency"].rank(ascending=False)[row.name]  # higher freq = better
+    recency_rank = profile_df["Avg_Recency"].rank()[row.name]
+    monetary_rank = profile_df["Avg_Monetary"].rank(ascending=False)[row.name]
+    frequency_rank = profile_df["Avg_Frequency"].rank(ascending=False)[row.name]
 
     is_recent = recency_rank <= n / 2
     is_high_spender = monetary_rank <= n / 2
@@ -74,6 +73,30 @@ def label_cluster(row, profile_df):
         return "😴 Inactive / Churned"
     else:
         return "🌱 Occasional / New Customers"
+
+
+def dedupe_labels(profile_df):
+    """If two clusters share a label, append their avg spend to tell them apart."""
+    profile_df = profile_df.copy()
+    counts = profile_df["Segment_Label"].value_counts()
+    dupes = counts[counts > 1].index.tolist()
+
+    for label in dupes:
+        mask = profile_df["Segment_Label"] == label
+        subset = profile_df[mask].sort_values("Avg_Monetary", ascending=False)
+        for rank, idx in enumerate(subset.index, start=1):
+            avg_val = profile_df.loc[idx, "Avg_Monetary"]
+            profile_df.loc[idx, "Segment_Label"] = f"{label} (avg ${avg_val:,.0f})"
+
+    return profile_df
+
+
+# Build labels, then dedupe
+profile["Segment_Label"] = profile.apply(lambda r: label_cluster(r, profile), axis=1)
+profile = dedupe_labels(profile)
+
+# Map the (now-unique) labels back onto individual customers
+rfm["Segment_Label"] = rfm["Cluster"].map(profile["Segment_Label"])
 
 
 # ---------------------------------------------------------
