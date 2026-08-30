@@ -52,6 +52,30 @@ def map_columns(df):
     return df.rename(columns=rename_map)
 
 
+def label_cluster(row, profile_df):
+    """Generate a human-readable label for a cluster based on its
+    relative Recency / Frequency / Monetary standing vs other clusters."""
+    n = profile_df.shape[0]
+    recency_rank = profile_df["Avg_Recency"].rank()[row.name]          # lower recency = better
+    monetary_rank = profile_df["Avg_Monetary"].rank(ascending=False)[row.name]  # higher spend = better
+    frequency_rank = profile_df["Avg_Frequency"].rank(ascending=False)[row.name]  # higher freq = better
+
+    is_recent = recency_rank <= n / 2
+    is_high_spender = monetary_rank <= n / 2
+    is_frequent = frequency_rank <= n / 2
+
+    if is_high_spender and is_frequent and is_recent:
+        return "💎 Top / VIP Customers"
+    elif is_high_spender and not is_recent:
+        return "⚠️ High-Value but At Risk"
+    elif is_frequent and is_recent and not is_high_spender:
+        return "🔁 Loyal Regular Buyers"
+    elif not is_recent and not is_frequent:
+        return "😴 Inactive / Churned"
+    else:
+        return "🌱 Occasional / New Customers"
+
+
 # ---------------------------------------------------------
 # LOAD DATA
 # ---------------------------------------------------------
@@ -83,8 +107,12 @@ uploaded_file = st.sidebar.file_uploader("Upload Auto Sales CSV", type="csv")
 if uploaded_file is not None:
     df_raw = load_data(uploaded_file)
 else:
-    st.info("👆 Upload a CSV file from the sidebar to see the analysis.")
-    st.stop()
+    default_path = SAMPLE_CSV_PATH
+    try:
+        df_raw = load_data(default_path)
+    except FileNotFoundError:
+        st.warning("Upload the Auto Sales CSV from the sidebar to get started.")
+        st.stop()
 
 # ---------------------------------------------------------
 # COLUMN VALIDATION / AUTO-MAPPING
@@ -227,18 +255,7 @@ coords = pca.fit_transform(X_scaled)
 rfm["PCA1"] = coords[:, 0]
 rfm["PCA2"] = coords[:, 1]
 
-# PCA scatter
-fig_pca = px.scatter(
-    rfm, x="PCA1", y="PCA2", color="Cluster",
-    hover_data=["CUSTOMERNAME", "Recency", "Frequency", "Monetary"],
-    title=f"Customer segments (k={k}) — PCA projection"
-)
-st.plotly_chart(fig_pca, use_container_width=True)
-
-# Cluster profile tabs
-cluster_ids = sorted(rfm["Cluster"].unique(), key=int)
-tabs = st.tabs([f"Cluster {c}" for c in cluster_ids])
-
+# Cluster profile (numeric summary)
 profile = rfm.groupby("Cluster").agg(
     Customers=("CUSTOMERNAME", "count"),
     Avg_Recency=("Recency", "mean"),
@@ -246,6 +263,24 @@ profile = rfm.groupby("Cluster").agg(
     Avg_Monetary=("Monetary", "mean"),
     Total_Monetary=("Monetary", "sum")
 ).round(1)
+
+# Human-readable label per cluster, based on relative RFM standing
+profile["Segment_Label"] = profile.apply(lambda r: label_cluster(r, profile), axis=1)
+
+# Map the label back onto individual customers for charts/tables
+rfm["Segment_Label"] = rfm["Cluster"].map(profile["Segment_Label"])
+
+# PCA scatter — colored by human-readable segment instead of raw cluster number
+fig_pca = px.scatter(
+    rfm, x="PCA1", y="PCA2", color="Segment_Label",
+    hover_data=["CUSTOMERNAME", "Recency", "Frequency", "Monetary"],
+    title=f"Customer segments (k={k}) — PCA projection"
+)
+st.plotly_chart(fig_pca, use_container_width=True)
+
+# Cluster profile tabs
+cluster_ids = sorted(rfm["Cluster"].unique(), key=int)
+tabs = st.tabs([f"{profile.loc[c, 'Segment_Label']}" for c in cluster_ids])
 
 for tab, cid in zip(tabs, cluster_ids):
     with tab:
@@ -272,7 +307,7 @@ customer = st.selectbox("Choose a customer", sorted(rfm["CUSTOMERNAME"].unique()
 lookup_row = rfm[rfm["CUSTOMERNAME"] == customer].iloc[0]
 
 lc1, lc2, lc3, lc4 = st.columns(4)
-lc1.metric("Cluster", lookup_row["Cluster"])
+lc1.metric("Segment", lookup_row["Segment_Label"])
 lc2.metric("Recency (days)", f"{lookup_row['Recency']:.0f}")
 lc3.metric("Frequency", f"{lookup_row['Frequency']:.0f}")
 lc4.metric("Monetary", f"${lookup_row['Monetary']:,.0f}")
@@ -285,7 +320,7 @@ st.divider()
 # otherwise falls back to the live model trained above.
 # ---------------------------------------------------------
 st.subheader("Predict a customer's segment")
-st.caption("Enter RFM values for any customer (existing or hypothetical) to see which cluster they'd fall into.")
+st.caption("Enter RFM values for any customer (existing or hypothetical) to see which segment they'd fall into.")
 
 @st.cache_resource
 def load_pretrained_model():
@@ -329,10 +364,18 @@ if st.button("Predict cluster"):
         input_scaled = live_scaler.transform(input_features)
         predicted_cluster = live_kmeans.predict(input_scaled)[0]
 
-    st.success(f"Predicted cluster: **{predicted_cluster}**")
-
-    # Show how this compares to the average profile of that cluster
     match_profile = profile[profile.index == str(predicted_cluster)]
+    segment_name = (
+        match_profile["Segment_Label"].values[0]
+        if not match_profile.empty else f"Cluster {predicted_cluster}"
+    )
+
+    st.success(f"Predicted segment: **{segment_name}**  \n(Cluster ID: {predicted_cluster})")
+
+    # Show how this compares to the average profile of that segment
     if not match_profile.empty:
-        st.write("Typical profile of this cluster:")
-        st.dataframe(match_profile, use_container_width=True)
+        st.write("Typical profile of this segment:")
+        st.dataframe(
+            match_profile[["Customers", "Avg_Recency", "Avg_Frequency", "Avg_Monetary", "Total_Monetary"]],
+            use_container_width=True
+        )
