@@ -62,28 +62,28 @@ def load_data(path_or_buffer):
 
 st.sidebar.header("Data")
 
-# Let anyone downloading understand the expected shape before they upload
-sample_template = pd.DataFrame({
-    "CUSTOMERNAME": ["Land of Toys Inc.", "Reims Collectables"],
-    "COUNTRY": ["USA", "France"],
-    "PRODUCTLINE": ["Motorcycles", "Motorcycles"],
-    "DAYS_SINCE_LASTORDER": [828, 757],
-    "ORDERNUMBER": [10107, 10121],
-    "SALES": [2871.00, 2765.90],
-})
-st.sidebar.download_button(
-    "Download sample CSV format",
-    data=sample_template.to_csv(index=False),
-    file_name="sample_format.csv",
-    help="Use this as a reference for the columns this app expects."
-)
+# Offer the actual training CSV as the reference/sample file, so anyone
+# uploading a new file knows exactly what structure is expected.
+SAMPLE_CSV_PATH = "Auto Sales data.csv"  # the file the model was trained on
+
+if os.path.exists(SAMPLE_CSV_PATH):
+    with open(SAMPLE_CSV_PATH, "rb") as f:
+        st.sidebar.download_button(
+            "Download sample CSV (training data)",
+            data=f,
+            file_name="Auto_Sales_sample.csv",
+            mime="text/csv",
+            help="This is the exact file structure the app expects — use it as a reference."
+        )
+else:
+    st.sidebar.caption("Sample CSV not found in app directory.")
 
 uploaded_file = st.sidebar.file_uploader("Upload Auto Sales CSV", type="csv")
 
 if uploaded_file is not None:
     df_raw = load_data(uploaded_file)
 else:
-    default_path = "Auto Sales data.csv"
+    default_path = SAMPLE_CSV_PATH
     try:
         df_raw = load_data(default_path)
     except FileNotFoundError:
