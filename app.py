@@ -104,9 +104,13 @@ def load_data(path_or_buffer):
 @st.cache_resource
 def load_pretrained_model():
     if os.path.exists("kmeans_model.pkl") and os.path.exists("scaler.pkl"):
-        model = joblib.load("kmeans_model.pkl")
-        scl = joblib.load("scaler.pkl")
-        return model, scl
+        try:
+            model = joblib.load("kmeans_model.pkl")
+            scl = joblib.load("scaler.pkl")
+            return model, scl
+        except Exception as e:
+            st.sidebar.error(f"Found model files but failed to load them: {e}")
+            return None, None
     return None, None
 
 
