@@ -34,6 +34,9 @@ COLUMN_ALIASES = {
 }
 
 
+# ---------------------------------------------------------
+# HELPER FUNCTIONS (all defined up top, before use)
+# ---------------------------------------------------------
 def map_columns(df):
     """Normalize column names and auto-map common naming variants to the
     standard names the app expects."""
@@ -53,11 +56,12 @@ def map_columns(df):
 
 
 def label_cluster(row, profile_df):
-    """Generate a human-readable label based on relative RFM standing."""
+    """Generate a human-readable label for a cluster based on its
+    relative Recency / Frequency / Monetary standing vs other clusters."""
     n = profile_df.shape[0]
-    recency_rank = profile_df["Avg_Recency"].rank()[row.name]
-    monetary_rank = profile_df["Avg_Monetary"].rank(ascending=False)[row.name]
-    frequency_rank = profile_df["Avg_Frequency"].rank(ascending=False)[row.name]
+    recency_rank = profile_df["Avg_Recency"].rank()[row.name]          # lower recency = better
+    monetary_rank = profile_df["Avg_Monetary"].rank(ascending=False)[row.name]  # higher spend = better
+    frequency_rank = profile_df["Avg_Frequency"].rank(ascending=False)[row.name]  # higher freq = better
 
     is_recent = recency_rank <= n / 2
     is_high_spender = monetary_rank <= n / 2
@@ -84,33 +88,33 @@ def dedupe_labels(profile_df):
     for label in dupes:
         mask = profile_df["Segment_Label"] == label
         subset = profile_df[mask].sort_values("Avg_Monetary", ascending=False)
-        for rank, idx in enumerate(subset.index, start=1):
+        for idx in subset.index:
             avg_val = profile_df.loc[idx, "Avg_Monetary"]
             profile_df.loc[idx, "Segment_Label"] = f"{label} (avg ${avg_val:,.0f})"
 
     return profile_df
 
 
-# Build labels, then dedupe
-profile["Segment_Label"] = profile.apply(lambda r: label_cluster(r, profile), axis=1)
-profile = dedupe_labels(profile)
-
-# Map the (now-unique) labels back onto individual customers
-rfm["Segment_Label"] = rfm["Cluster"].map(profile["Segment_Label"])
-
-
-# ---------------------------------------------------------
-# LOAD DATA
-# ---------------------------------------------------------
 @st.cache_data
 def load_data(path_or_buffer):
     df = pd.read_csv(path_or_buffer)
     return df
 
+
+@st.cache_resource
+def load_pretrained_model():
+    if os.path.exists("kmeans_model.pkl") and os.path.exists("scaler.pkl"):
+        model = joblib.load("kmeans_model.pkl")
+        scl = joblib.load("scaler.pkl")
+        return model, scl
+    return None, None
+
+
+# ---------------------------------------------------------
+# SIDEBAR — DATA UPLOAD
+# ---------------------------------------------------------
 st.sidebar.header("Data")
 
-# Offer the actual training CSV as the reference/sample file, so anyone
-# uploading a new file knows exactly what structure is expected.
 SAMPLE_CSV_PATH = "Auto Sales data.csv"  # the file the model was trained on
 
 if os.path.exists(SAMPLE_CSV_PATH):
@@ -283,8 +287,9 @@ profile = rfm.groupby("Cluster").agg(
     Total_Monetary=("Monetary", "sum")
 ).round(1)
 
-# Human-readable label per cluster, based on relative RFM standing
+# Human-readable, de-duplicated label per cluster
 profile["Segment_Label"] = profile.apply(lambda r: label_cluster(r, profile), axis=1)
+profile = dedupe_labels(profile)
 
 # Map the label back onto individual customers for charts/tables
 rfm["Segment_Label"] = rfm["Cluster"].map(profile["Segment_Label"])
@@ -335,19 +340,9 @@ st.divider()
 
 # ---------------------------------------------------------
 # PREDICT CLUSTER FOR A NEW / HYPOTHETICAL CUSTOMER
-# Uses the pre-trained kmeans_model.pkl + scaler.pkl if present,
-# otherwise falls back to the live model trained above.
 # ---------------------------------------------------------
 st.subheader("Predict a customer's segment")
 st.caption("Enter RFM values for any customer (existing or hypothetical) to see which segment they'd fall into.")
-
-@st.cache_resource
-def load_pretrained_model():
-    if os.path.exists("kmeans_model.pkl") and os.path.exists("scaler.pkl"):
-        model = joblib.load("kmeans_model.pkl")
-        scl = joblib.load("scaler.pkl")
-        return model, scl
-    return None, None
 
 pretrained_model, pretrained_scaler = load_pretrained_model()
 
@@ -391,7 +386,6 @@ if st.button("Predict cluster"):
 
     st.success(f"Predicted segment: **{segment_name}**  \n(Cluster ID: {predicted_cluster})")
 
-    # Show how this compares to the average profile of that segment
     if not match_profile.empty:
         st.write("Typical profile of this segment:")
         st.dataframe(
