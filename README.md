@@ -63,11 +63,3 @@ These three features are scaled and clustered using **K-Means**, with the optima
 - **joblib** — model persistence
 
 ---
-
-## ▶️ Running Locally
-
-```bash
-git clone <repo-url>
-cd auto_sales_customer_segmentation
-pip install -r requirements.txt
-streamlit run app.py
