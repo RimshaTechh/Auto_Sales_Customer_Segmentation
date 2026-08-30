@@ -107,12 +107,8 @@ uploaded_file = st.sidebar.file_uploader("Upload Auto Sales CSV", type="csv")
 if uploaded_file is not None:
     df_raw = load_data(uploaded_file)
 else:
-    default_path = SAMPLE_CSV_PATH
-    try:
-        df_raw = load_data(default_path)
-    except FileNotFoundError:
-        st.warning("Upload the Auto Sales CSV from the sidebar to get started.")
-        st.stop()
+    st.info("👆 Please upload a CSV file from the sidebar to see the analysis.")
+    st.stop()
 
 # ---------------------------------------------------------
 # COLUMN VALIDATION / AUTO-MAPPING
