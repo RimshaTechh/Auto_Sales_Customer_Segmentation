@@ -14,6 +14,45 @@ from sklearn.decomposition import PCA
 st.set_page_config(page_title="Auto Sales — Customer Segmentation", layout="wide")
 
 # ---------------------------------------------------------
+# COLUMN REQUIREMENTS + ALIASES
+# ---------------------------------------------------------
+REQUIRED_COLUMNS = [
+    "CUSTOMERNAME", "COUNTRY", "PRODUCTLINE",
+    "DAYS_SINCE_LASTORDER", "ORDERNUMBER", "SALES"
+]
+
+COLUMN_ALIASES = {
+    "COUNTRY": ["COUNTRY", "NATION", "COUNTRY_NAME", "COUNTRYNAME"],
+    "CUSTOMERNAME": ["CUSTOMERNAME", "CUSTOMER_NAME", "CUSTOMER NAME", "CUSTOMER", "CLIENT", "CLIENTNAME"],
+    "PRODUCTLINE": ["PRODUCTLINE", "PRODUCT_LINE", "PRODUCT LINE", "PRODUCT"],
+    "SALES": ["SALES", "SALE_AMOUNT", "SALEAMOUNT", "REVENUE", "TOTAL_SALES", "TOTALSALES", "AMOUNT"],
+    "ORDERNUMBER": ["ORDERNUMBER", "ORDER_NUMBER", "ORDER NUMBER", "ORDER_ID", "ORDERID"],
+    "DAYS_SINCE_LASTORDER": [
+        "DAYS_SINCE_LASTORDER", "DAYS_SINCE_LAST_ORDER", "DAYSSINCELASTORDER",
+        "RECENCY_DAYS", "RECENCYDAYS", "RECENCY"
+    ],
+}
+
+
+def map_columns(df):
+    """Normalize column names and auto-map common naming variants to the
+    standard names the app expects."""
+    df = df.copy()
+    df.columns = df.columns.str.strip().str.upper().str.replace(r"\s+", "_", regex=True)
+
+    rename_map = {}
+    for standard, aliases in COLUMN_ALIASES.items():
+        if standard in df.columns:
+            continue
+        for alias in aliases:
+            alias_norm = alias.strip().upper().replace(" ", "_")
+            if alias_norm in df.columns:
+                rename_map[alias_norm] = standard
+                break
+    return df.rename(columns=rename_map)
+
+
+# ---------------------------------------------------------
 # LOAD DATA
 # ---------------------------------------------------------
 @st.cache_data
@@ -22,27 +61,93 @@ def load_data(path_or_buffer):
     return df
 
 st.sidebar.header("Data")
+
+# Let anyone downloading understand the expected shape before they upload
+sample_template = pd.DataFrame({
+    "CUSTOMERNAME": ["Land of Toys Inc.", "Reims Collectables"],
+    "COUNTRY": ["USA", "France"],
+    "PRODUCTLINE": ["Motorcycles", "Motorcycles"],
+    "DAYS_SINCE_LASTORDER": [828, 757],
+    "ORDERNUMBER": [10107, 10121],
+    "SALES": [2871.00, 2765.90],
+})
+st.sidebar.download_button(
+    "Download sample CSV format",
+    data=sample_template.to_csv(index=False),
+    file_name="sample_format.csv",
+    help="Use this as a reference for the columns this app expects."
+)
+
 uploaded_file = st.sidebar.file_uploader("Upload Auto Sales CSV", type="csv")
 
 if uploaded_file is not None:
-    df = load_data(uploaded_file)
+    df_raw = load_data(uploaded_file)
 else:
     default_path = "Auto Sales data.csv"
     try:
-        df = load_data(default_path)
+        df_raw = load_data(default_path)
     except FileNotFoundError:
         st.warning("Upload the Auto Sales CSV from the sidebar to get started.")
         st.stop()
+
+# ---------------------------------------------------------
+# COLUMN VALIDATION / AUTO-MAPPING
+# ---------------------------------------------------------
+df = map_columns(df_raw)
+
+missing_cols = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+
+if missing_cols:
+    st.error(
+        "Some required columns could not be automatically detected in your CSV: "
+        f"**{', '.join(missing_cols)}**"
+    )
+    st.info(
+        "You can either re-upload a CSV that includes these columns, "
+        "or manually map your existing columns to the required ones below."
+    )
+
+    with st.expander("Manually map columns", expanded=True):
+        available_cols = ["-- None --"] + df_raw.columns.tolist()
+        manual_map = {}
+        for col in missing_cols:
+            choice = st.selectbox(f"Which column corresponds to **{col}**?", available_cols, key=f"map_{col}")
+            if choice != "-- None --":
+                manual_map[col] = choice
+
+        if manual_map:
+            for standard, source_col in manual_map.items():
+                df[standard] = df_raw[source_col]
+
+    still_missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if still_missing:
+        st.error(f"Still missing required column(s): {', '.join(still_missing)}. Cannot proceed.")
+        st.stop()
+    else:
+        st.success("All required columns mapped. Continuing below.")
+
+# Coerce numeric columns in case they came in as text / had stray characters
+df["SALES"] = pd.to_numeric(df["SALES"], errors="coerce")
+df["DAYS_SINCE_LASTORDER"] = pd.to_numeric(df["DAYS_SINCE_LASTORDER"], errors="coerce")
+
+dropped = df["SALES"].isna().sum() + df["DAYS_SINCE_LASTORDER"].isna().sum()
+if dropped > 0:
+    st.warning(f"{dropped} row(s) had non-numeric SALES / DAYS_SINCE_LASTORDER values and were dropped.")
+df = df.dropna(subset=["SALES", "DAYS_SINCE_LASTORDER"])
+
+if df.empty:
+    st.error("No valid rows remain after cleaning. Please check your CSV's data quality.")
+    st.stop()
 
 # ---------------------------------------------------------
 # SIDEBAR FILTERS
 # ---------------------------------------------------------
 st.sidebar.header("Filters")
 
-countries = sorted(df["COUNTRY"].unique().tolist())
+countries = sorted(df["COUNTRY"].dropna().unique().tolist())
 selected_countries = st.sidebar.multiselect("Country", countries, default=countries)
 
-product_lines = sorted(df["PRODUCTLINE"].unique().tolist())
+product_lines = sorted(df["PRODUCTLINE"].dropna().unique().tolist())
 selected_products = st.sidebar.multiselect("Product line", product_lines, default=product_lines)
 
 df_filtered = df[
